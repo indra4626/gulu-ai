@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut, Reply, Undo2, PanelRightOpen, Pin } from 'lucide-react';
+import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut, Reply, Undo2, PanelRightOpen, Pin, Smile, BarChart3, Briefcase, Bell, Lightbulb } from 'lucide-react';
 import ChatMessage from './components/ChatMessage';
 import SidePanel from './components/SidePanel';
+import MoodTracker from './components/MoodTracker';
+import InsightsDashboard from './components/InsightsDashboard';
 import { supabase } from './services/supabase';
 import { deriveKey } from './utils/cryptoUtils';
 import { sendToGemini } from './services/geminiApi';
@@ -12,6 +14,10 @@ import { detectTopic, getRelatedQuestion } from './utils/topicDetector';
 import { detectReminders, detectMemoryMoment, getCheckInMessage } from './utils/reminderDetector';
 import { loadMessages, saveMessage, clearAllMessages, saveProfile, loadProfile } from './services/messageService';
 import { saveMemory, loadMemories, togglePinMemory, deleteMemory, saveReminder, loadReminders, completeReminder } from './services/memoryBankService';
+import { saveMoodEntry, loadMoodHistory } from './services/moodService';
+import { buildWorkPrompt, isWorkMessage } from './utils/workPrompt';
+import { getProactiveSuggestions } from './utils/proactiveEngine';
+import { generateWeeklyInsights } from './utils/insightsGenerator';
 import AuthScreen from './components/AuthScreen';
 
 function App() {
@@ -47,6 +53,15 @@ function App() {
   const [reminders, setReminders] = useState([]);
   const [topicFilter, setTopicFilter] = useState(null);
   const [checkInMsg, setCheckInMsg] = useState(null);
+
+  // Phase 9: Mood, Work Mode, Insights, Proactive
+  const [showMoodTracker, setShowMoodTracker] = useState(false);
+  const [moodHistory, setMoodHistory] = useState([]);
+  const [workMode, setWorkMode] = useState(false);
+  const [showInsights, setShowInsights] = useState(false);
+  const [weeklyInsights, setWeeklyInsights] = useState(null);
+  const [proactiveSuggestions, setProactiveSuggestions] = useState([]);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
   const messagesEndRef = useRef(null);
   const passwordRef = useRef('');
@@ -102,14 +117,28 @@ function App() {
           setReminders(rems);
         } catch {}
 
+        // Load mood history
+        try {
+          const moods = await loadMoodHistory(key, 30);
+          setMoodHistory(moods);
+        } catch {}
+
         // Check-in message
         if (messages.length > 0) {
           const lastMsg = messages[messages.length - 1];
           const daysSince = Math.floor((Date.now() - lastMsg.timestamp) / 86400000);
           if (daysSince >= 1) {
-            setCheckInMsg(getCheckInMessage(daysSince, profile, mems));
+            setCheckInMsg(getCheckInMessage(daysSince, profile, []));
+            // Browser notification for check-in
+            if (Notification.permission === 'granted' && daysSince >= 2) {
+              new Notification('GULU misses you! 💜', { body: `It\'s been ${daysSince} days. Come say hi!`, icon: '🤖' });
+            }
           }
         }
+
+        // Generate proactive suggestions
+        const sug = getProactiveSuggestions(profile, [], stats, rems || [], []);
+        setProactiveSuggestions(sug);
       }
     } catch (err) {
       console.error('Load error:', err);
@@ -192,6 +221,42 @@ function App() {
     }
   };
 
+  // --- Browser Notifications ---
+  const requestNotifications = () => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().then(p => setNotificationsEnabled(p === 'granted'));
+    } else if (Notification.permission === 'granted') {
+      setNotificationsEnabled(true);
+    }
+  };
+
+  useEffect(() => {
+    if (session && 'Notification' in window) {
+      setNotificationsEnabled(Notification.permission === 'granted');
+    }
+  }, [session]);
+
+  // --- Mood Save ---
+  const handleSaveMood = async (mood, score, note, triggers) => {
+    if (!cryptoKey || !session) return;
+    try {
+      const saved = await saveMoodEntry(cryptoKey, session.user.id, mood, score, note, triggers);
+      setMoodHistory(prev => [...prev, saved]);
+      // Refresh proactive suggestions with updated mood
+      const sug = getProactiveSuggestions(userProfile, [...moodHistory, saved], topicStats, reminders, []);
+      setProactiveSuggestions(sug);
+    } catch (err) {
+      console.error('Mood save error:', err);
+    }
+  };
+
+  // --- Insights ---
+  const handleShowInsights = () => {
+    const insights = generateWeeklyInsights(chatHistory, moodHistory, topicStats, memories);
+    setWeeklyInsights(insights);
+    setShowInsights(true);
+  };
+
   // --- Send message ---
   const handleSend = async () => {
     if (!inputText.trim() || isTyping || !cryptoKey || !session) return;
@@ -260,7 +325,14 @@ function App() {
     setCurrentEmotion('thinking');
 
     try {
-      const systemPrompt = buildSystemPrompt(updatedProfile, conversationSummary);
+      // Select system prompt based on work mode
+      const useWorkMode = workMode || isWorkMessage(rawText);
+      const systemPrompt = useWorkMode
+        ? buildWorkPrompt(updatedProfile, [], null)
+        : buildSystemPrompt(updatedProfile, conversationSummary);
+
+      if (useWorkMode && !workMode) setWorkMode(true);
+
       const apiHistory = [...chatHistory, { role: 'user', content: maskedText }]
         .slice(-20)
         .map(msg => ({
@@ -428,11 +500,15 @@ function App() {
           </div>
           <div>
             <h1 className="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-blue-400">GULU</h1>
-            <p className="text-xs text-slate-500">{emo.label} • {realWorldData.time}</p>
+            <p className="text-xs text-slate-500">{workMode ? '💼 Work Mode' : emo.label} • {realWorldData.time}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden sm:block text-xs text-slate-500 mr-2">{realWorldData.date}</span>
+        <div className="flex items-center gap-1">
+          <span className="hidden sm:block text-xs text-slate-500 mr-1">{realWorldData.date}</span>
+          <button onClick={() => setShowMoodTracker(true)} className="p-2 text-slate-500 hover:text-yellow-400 hover:bg-slate-800 rounded-lg transition" title="Log Mood"><Smile size={18} /></button>
+          <button onClick={handleShowInsights} className="p-2 text-slate-500 hover:text-blue-400 hover:bg-slate-800 rounded-lg transition" title="Weekly Insights"><BarChart3 size={18} /></button>
+          <button onClick={() => setWorkMode(!workMode)} className={`p-2 hover:bg-slate-800 rounded-lg transition ${workMode ? 'text-amber-400' : 'text-slate-500 hover:text-amber-400'}`} title={workMode ? 'Exit Work Mode' : 'Work Mode'}><Briefcase size={18} /></button>
+          {!notificationsEnabled && <button onClick={requestNotifications} className="p-2 text-slate-500 hover:text-green-400 hover:bg-slate-800 rounded-lg transition" title="Enable Notifications"><Bell size={18} /></button>}
           <button onClick={() => setShowPanel(!showPanel)} className="p-2 text-slate-500 hover:text-violet-400 hover:bg-slate-800 rounded-lg transition" title="Topics & Memories"><PanelRightOpen size={18} /></button>
           <button onClick={handleClearChat} className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition" title="Clear Chat"><Trash2 size={18} /></button>
           <button onClick={() => { setApiKeyInput(apiKey); setShowSettings(true); }} className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition" title="Settings"><Settings size={18} /></button>
@@ -446,6 +522,28 @@ function App() {
           <div className="mx-auto max-w-md bg-violet-950/30 border border-violet-800/30 rounded-xl px-4 py-3 text-sm text-violet-300 text-center msg-animate">
             {checkInMsg}
             <button onClick={() => setCheckInMsg(null)} className="ml-2 text-violet-500 hover:text-violet-300"><X size={14} className="inline" /></button>
+          </div>
+        )}
+
+        {/* Proactive suggestions */}
+        {proactiveSuggestions.length > 0 && chatHistory.length > 0 && (
+          <div className="mx-auto max-w-md space-y-1.5 msg-animate">
+            {proactiveSuggestions.map((s, i) => (
+              <div key={i} className="flex items-center gap-2 bg-slate-800/50 border border-slate-700/50 rounded-xl px-3 py-2 text-sm">
+                <Lightbulb size={14} className="text-amber-400 flex-shrink-0" />
+                <span className="text-slate-300 flex-1">{s.text}</span>
+                <button onClick={() => { setInputText(s.text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}]/gu, '').trim()); setProactiveSuggestions(prev => prev.filter((_, j) => j !== i)); }} className="text-[10px] text-violet-400 hover:text-violet-300 flex-shrink-0">Ask</button>
+                <button onClick={() => setProactiveSuggestions(prev => prev.filter((_, j) => j !== i))} className="text-slate-600 hover:text-slate-400 flex-shrink-0"><X size={12} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Work mode banner */}
+        {workMode && (
+          <div className="mx-auto max-w-md bg-amber-950/30 border border-amber-800/30 rounded-xl px-4 py-2 text-xs text-amber-300 text-center flex items-center justify-center gap-2">
+            <Briefcase size={12} /> Work Mode Active — GULU is your strategic partner
+            <button onClick={() => setWorkMode(false)} className="ml-1 text-amber-500 hover:text-amber-300"><X size={12} className="inline" /></button>
           </div>
         )}
 
@@ -548,6 +646,21 @@ function App() {
         onDeleteMemory={handleDeleteMemory}
         onCompleteReminder={handleCompleteReminder}
         onExportMemories={handleExportMemories}
+      />
+
+      {/* Mood Tracker Modal */}
+      <MoodTracker
+        isOpen={showMoodTracker}
+        onClose={() => setShowMoodTracker(false)}
+        onSave={handleSaveMood}
+        moodHistory={moodHistory}
+      />
+
+      {/* Insights Dashboard Modal */}
+      <InsightsDashboard
+        isOpen={showInsights}
+        onClose={() => setShowInsights(false)}
+        insights={weeklyInsights}
       />
     </div>
   );
