@@ -3,4 +3,164 @@
 body {
   background-color: #020617;
   color: #f1f5f9;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+/* ========== MESSAGE ANIMATIONS ========== */
+
+/* Fade-in + slide from bottom */
+@keyframes msg-appear {
+  0% { opacity: 0; transform: translateY(16px) scale(0.97); }
+  60% { opacity: 1; transform: translateY(-2px) scale(1.005); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.msg-animate {
+  animation: msg-appear 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+/* Stagger delay for loaded messages */
+.msg-animate-fast { animation-duration: 0.2s; }
+
+/* User message slides from right */
+@keyframes msg-slide-right {
+  0% { opacity: 0; transform: translateX(30px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.msg-user { animation: msg-slide-right 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* GULU message slides from left */
+@keyframes msg-slide-left {
+  0% { opacity: 0; transform: translateX(-30px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+.msg-gulu { animation: msg-slide-left 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* ========== TYPING INDICATOR ========== */
+
+@keyframes typing-dot {
+  0%, 60% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-6px); opacity: 1; }
+}
+
+.typing-dot { animation: typing-dot 1.2s ease-in-out infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Typing container pulse */
+@keyframes typing-pulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
+}
+.typing-container { animation: typing-pulse 2s ease-in-out infinite; }
+
+/* ========== READ CHECKMARKS ========== */
+
+@keyframes check-draw {
+  0% { stroke-dashoffset: 12; opacity: 0; }
+  50% { opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 1; }
+}
+
+.read-check {
+  stroke-dasharray: 12;
+  stroke-dashoffset: 12;
+  animation: check-draw 0.5s ease-out 0.3s forwards;
+}
+.read-check-2 { animation-delay: 0.5s; }
+
+/* ========== REACTIONS ========== */
+
+@keyframes reaction-pop {
+  0% { transform: scale(0) rotate(-20deg); opacity: 0; }
+  50% { transform: scale(1.4) rotate(5deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+.reaction-pop { animation: reaction-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+
+/* Floating reaction */
+@keyframes reaction-float {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-60px) scale(1.5); opacity: 0; }
+}
+.reaction-float {
+  animation: reaction-float 0.8s ease-out forwards;
+  pointer-events: none;
+  position: absolute;
+  z-index: 50;
+}
+
+/* Reaction picker slide-up */
+@keyframes picker-slide {
+  0% { opacity: 0; transform: translateY(8px) scale(0.9); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.reaction-picker { animation: picker-slide 0.2s ease-out both; }
+
+/* ========== SEND BUTTON ========== */
+
+@keyframes send-pulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.9); }
+  100% { transform: scale(1); }
+}
+.send-press { animation: send-pulse 0.15s ease-in-out; }
+
+/* Send swoosh */
+@keyframes send-swoosh {
+  0% { transform: translateX(0) translateY(0); opacity: 1; }
+  100% { transform: translateX(20px) translateY(-10px); opacity: 0; }
+}
+
+/* ========== DELETE / UNDO ========== */
+
+@keyframes msg-delete {
+  0% { transform: translateX(0); opacity: 1; max-height: 200px; }
+  50% { transform: translateX(-100px); opacity: 0; }
+  100% { transform: translateX(-100px); opacity: 0; max-height: 0; padding: 0; margin: 0; }
+}
+.msg-deleting { animation: msg-delete 0.4s ease-in-out forwards; overflow: hidden; }
+
+/* Undo toast */
+@keyframes toast-slide {
+  0% { transform: translateY(100px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+.undo-toast { animation: toast-slide 0.3s ease-out both; }
+
+@keyframes toast-exit {
+  0% { transform: translateY(0); opacity: 1; }
+  100% { transform: translateY(100px); opacity: 0; }
+}
+.undo-toast-exit { animation: toast-exit 0.3s ease-in both; }
+
+/* ========== SWIPE ========== */
+
+.msg-swipeable {
+  transition: transform 0.1s ease-out;
+  touch-action: pan-y;
+}
+
+/* Reply indicator */
+@keyframes reply-appear {
+  0% { opacity: 0; max-height: 0; }
+  100% { opacity: 1; max-height: 60px; }
+}
+.reply-bar { animation: reply-appear 0.2s ease-out both; }
+
+/* ========== MISC ========== */
+
+/* Smooth scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+/* Prevent text selection on long-press */
+.no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }

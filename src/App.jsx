@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut } from 'lucide-react';
+import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut, Reply, Undo2 } from 'lucide-react';
+import ChatMessage from './components/ChatMessage';
 import { supabase } from './services/supabase';
 import { deriveKey } from './utils/cryptoUtils';
 import { sendToGemini } from './services/geminiApi';
@@ -29,6 +30,11 @@ function App() {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [realWorldData, setRealWorldData] = useState({ time: '', date: '' });
   const [error, setError] = useState('');
+  const [replyTo, setReplyTo] = useState(null);
+  const [undoMsg, setUndoMsg] = useState(null);
+  const [sendAnimating, setSendAnimating] = useState(false);
+  const [newMsgIds, setNewMsgIds] = useState(new Set());
+  const undoTimerRef = useRef(null);
 
   const messagesEndRef = useRef(null);
   const passwordRef = useRef('');
@@ -159,6 +165,13 @@ function App() {
 
     const rawText = inputText.trim();
     setInputText('');
+    const currentReply = replyTo;
+    setReplyTo(null);
+
+    // Send button animation + haptic
+    setSendAnimating(true);
+    if (navigator.vibrate) navigator.vibrate(10);
+    setTimeout(() => setSendAnimating(false), 150);
 
     const { maskedText } = maskSensitiveData(rawText);
     const userInfo = extractUserInfo(rawText);
@@ -179,6 +192,8 @@ function App() {
 
     // Save user message to Supabase
     const savedUser = await saveMessage(cryptoKey, session.user.id, 'user', rawText);
+    if (currentReply) savedUser.replyTo = currentReply;
+    setNewMsgIds(prev => new Set([...prev, savedUser.id]));
     setChatHistory(prev => [...prev, savedUser]);
 
     // Get AI response
@@ -199,6 +214,7 @@ function App() {
 
       // Save GULU's response to Supabase
       const savedGulu = await saveMessage(cryptoKey, session.user.id, 'gulu', response, emotion);
+      setNewMsgIds(prev => new Set([...prev, savedGulu.id]));
       setChatHistory(prev => [...prev, savedGulu]);
       setCurrentEmotion(emotion);
 
@@ -221,6 +237,34 @@ function App() {
     if (!confirm('Delete ALL chat history? This cannot be undone.')) return;
     await clearAllMessages(session.user.id);
     setChatHistory([]);
+  };
+
+  // Delete single message with undo
+  const handleDeleteMsg = (msg) => {
+    setChatHistory(prev => prev.filter(m => m.id !== msg.id));
+    setUndoMsg(msg);
+    clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => {
+      setUndoMsg(null);
+      // Actually delete from Supabase after undo window
+      supabase.from('messages').delete().eq('id', msg.id);
+    }, 5000);
+  };
+
+  const handleUndo = () => {
+    if (!undoMsg) return;
+    clearTimeout(undoTimerRef.current);
+    setChatHistory(prev => {
+      const restored = [...prev, undoMsg].sort((a, b) => a.timestamp - b.timestamp);
+      return restored;
+    });
+    setUndoMsg(null);
+  };
+
+  const handleReply = (msg) => {
+    setReplyTo(msg);
+    // Focus the input
+    document.querySelector('input[placeholder="Talk to GULU..."]')?.focus();
   };
 
   // --- Emotion display ---
@@ -313,27 +357,28 @@ function App() {
         )}
 
         {chatHistory.map((msg, idx) => (
-          <div key={msg.id || idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`flex gap-2.5 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-              <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm ${msg.role === 'user' ? 'bg-slate-700' : 'bg-gradient-to-br from-violet-500 to-blue-600'}`}>
-                {msg.role === 'user' ? <User size={14} /> : <Heart size={14} />}
-              </div>
-              <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed ${msg.role === 'user' ? 'bg-slate-800 text-slate-200 rounded-tr-sm' : 'bg-violet-950/40 border border-violet-900/30 text-slate-200 rounded-tl-sm'}`}>
-                <p className="whitespace-pre-wrap">{msg.content}</p>
-              </div>
-            </div>
-          </div>
+          <ChatMessage
+            key={msg.id || idx}
+            msg={msg}
+            index={idx}
+            isNew={newMsgIds.has(msg.id)}
+            onDelete={handleDeleteMsg}
+            onReply={handleReply}
+          />
         ))}
 
         {isTyping && (
-          <div className="flex justify-start">
+          <div className="flex justify-start msg-gulu typing-container">
             <div className="flex gap-2.5">
               <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-blue-600 flex items-center justify-center"><Heart size={14} /></div>
-              <div className="px-4 py-3 bg-violet-950/40 border border-violet-900/30 rounded-2xl rounded-tl-sm">
-                <div className="flex gap-1.5">
-                  <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:'0ms'}}></span>
-                  <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:'150ms'}}></span>
-                  <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:'300ms'}}></span>
+              <div className="px-4 py-3.5 bg-violet-950/40 border border-violet-900/30 rounded-2xl rounded-tl-sm">
+                <div className="flex items-center gap-2">
+                  <div className="flex gap-1.5">
+                    <span className="w-2 h-2 bg-violet-400 rounded-full typing-dot"></span>
+                    <span className="w-2 h-2 bg-violet-400 rounded-full typing-dot"></span>
+                    <span className="w-2 h-2 bg-violet-400 rounded-full typing-dot"></span>
+                  </div>
+                  <span className="text-xs text-slate-500 ml-1">GULU is typing...</span>
                 </div>
               </div>
             </div>
@@ -344,10 +389,39 @@ function App() {
         <div ref={messagesEndRef} />
       </main>
 
+      {/* Undo Toast */}
+      {undoMsg && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 undo-toast">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-2xl">
+            <span className="text-sm text-slate-300">Message deleted</span>
+            <button onClick={handleUndo} className="text-violet-400 hover:text-violet-300 text-sm font-semibold flex items-center gap-1">
+              <Undo2 size={14} /> Undo
+            </button>
+          </div>
+        </div>
+      )}
+
       <footer className="flex-shrink-0 px-4 pb-4 pt-2">
+        {/* Reply bar */}
+        {replyTo && (
+          <div className="reply-bar flex items-center justify-between bg-slate-800/80 border-l-2 border-violet-500 rounded-lg px-3 py-2 mb-2">
+            <div className="flex items-center gap-2 overflow-hidden">
+              <Reply size={14} className="text-violet-400 flex-shrink-0" />
+              <span className="text-xs text-slate-400 truncate">Replying to: {replyTo.content.slice(0, 60)}{replyTo.content.length > 60 ? '...' : ''}</span>
+            </div>
+            <button onClick={() => setReplyTo(null)} className="text-slate-500 hover:text-slate-300 flex-shrink-0 ml-2"><X size={14} /></button>
+          </div>
+        )}
+
         <form onSubmit={e => { e.preventDefault(); handleSend(); }} className="flex gap-2">
           <input type="text" value={inputText} onChange={e => setInputText(e.target.value)} placeholder="Talk to GULU..." className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-3.5 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/50 transition text-sm" />
-          <button type="submit" disabled={!inputText.trim() || isTyping} className="bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 disabled:from-slate-800 disabled:to-slate-800 text-white rounded-xl px-5 flex items-center justify-center transition-all"><Send size={18} /></button>
+          <button
+            type="submit"
+            disabled={!inputText.trim() || isTyping}
+            className={`bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 disabled:from-slate-800 disabled:to-slate-800 text-white rounded-xl px-5 flex items-center justify-center transition-all ${sendAnimating ? 'send-press' : ''}`}
+          >
+            <Send size={18} />
+          </button>
         </form>
         <p className="text-center text-[11px] text-slate-600 mt-2 flex items-center justify-center gap-1">
           <ShieldAlert size={10} /> E2E encrypted • Synced across devices • PII auto-redacted
