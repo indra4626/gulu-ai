@@ -1,78 +1,63 @@
 /**
  * @module cryptoUtils
- * @description AES-GCM (256-bit) encryption/decryption utilities using the Web Crypto API.
- * 
- * **Why AES-GCM?**
- * - Provides authenticated encryption (confidentiality + integrity)
- * - Native browser support via Web Crypto API (no external dependencies)
- * - 12-byte IV generated per operation prevents nonce reuse
- * 
- * **Storage Format:** Base64( IV[12 bytes] || Ciphertext[N bytes] || AuthTag[16 bytes] )
- * 
- * @see https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/encrypt#aes-gcm
+ * @description AES-GCM encryption using PBKDF2-derived keys from user's password.
+ * Same password always produces the same key → data persists across sessions.
  */
 
-const ALGO = "AES-GCM";
+const ALGO = 'AES-GCM';
+const SALT = 'gulu-ai-2026-salt'; // Static salt (acceptable for single-user app)
 
 /**
- * Generate a new AES-GCM 256-bit CryptoKey.
- * Key is extractable and supports both encrypt/decrypt operations.
- * 
- * @returns {Promise<CryptoKey>} A new AES-GCM key
- * @example
- * const key = await generateKey();
+ * Derive a consistent AES-256 key from a user's password using PBKDF2.
+ * Same password → same key every time → can decrypt old data.
  */
-export const generateKey = async () => {
-  return await window.crypto.subtle.generateKey(
+export const deriveKey = async (password) => {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+
+  return await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: encoder.encode(SALT),
+      iterations: 100000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
     { name: ALGO, length: 256 },
-    true,
-    ["encrypt", "decrypt"]
+    false,
+    ['encrypt', 'decrypt']
   );
 };
 
 /**
- * Encrypt a plaintext string using AES-GCM.
- * A fresh 12-byte IV is generated for each call and prepended to the output.
- * 
- * @param {CryptoKey} key - The AES-GCM key from generateKey()
- * @param {string} data - Plaintext string to encrypt
- * @returns {Promise<string>} Base64-encoded string containing IV + ciphertext
- * @throws {Error} If encryption fails
- * 
- * @example
- * const encrypted = await encryptData(key, JSON.stringify(messages));
- * localStorage.setItem('history', encrypted);
+ * Encrypt plaintext string using AES-GCM with a derived key.
  */
 export const encryptData = async (key, data) => {
   const encoder = new TextEncoder();
   const encoded = encoder.encode(data);
-  const iv = window.crypto.getRandomValues(new Uint8Array(12));
-  
-  const encrypted = await window.crypto.subtle.encrypt(
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  const encrypted = await crypto.subtle.encrypt(
     { name: ALGO, iv },
     key,
     encoded
   );
 
-  // Combine: [IV (12 bytes)] [Ciphertext + AuthTag]
   const combined = new Uint8Array(iv.length + encrypted.byteLength);
   combined.set(iv, 0);
   combined.set(new Uint8Array(encrypted), iv.length);
-  
+
   return btoa(String.fromCharCode.apply(null, combined));
 };
 
 /**
- * Decrypt a Base64-encoded AES-GCM ciphertext back to plaintext.
- * Extracts the IV from the first 12 bytes, then decrypts the remainder.
- * 
- * @param {CryptoKey} key - The same AES-GCM key used for encryption
- * @param {string} encryptedBase64 - Base64 string from encryptData()
- * @returns {Promise<string|null>} Decrypted plaintext, or null if decryption fails
- * 
- * @example
- * const json = await decryptData(key, localStorage.getItem('history'));
- * const messages = JSON.parse(json);
+ * Decrypt a Base64-encoded AES-GCM ciphertext.
  */
 export const decryptData = async (key, encryptedBase64) => {
   try {
@@ -85,16 +70,14 @@ export const decryptData = async (key, encryptedBase64) => {
     const iv = combined.slice(0, 12);
     const data = combined.slice(12);
 
-    const decrypted = await window.crypto.subtle.decrypt(
+    const decrypted = await crypto.subtle.decrypt(
       { name: ALGO, iv },
       key,
       data
     );
 
-    const decoder = new TextDecoder();
-    return decoder.decode(decrypted);
-  } catch (error) {
-    console.error("Decryption failed:", error);
+    return new TextDecoder().decode(decrypted);
+  } catch {
     return null;
   }
 };
