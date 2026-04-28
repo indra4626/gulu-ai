@@ -1,13 +1,17 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut, Reply, Undo2 } from 'lucide-react';
+import { Send, Lock, ShieldAlert, User, Trash2, Settings, X, Heart, LogOut, Reply, Undo2, PanelRightOpen, Pin } from 'lucide-react';
 import ChatMessage from './components/ChatMessage';
+import SidePanel from './components/SidePanel';
 import { supabase } from './services/supabase';
 import { deriveKey } from './utils/cryptoUtils';
 import { sendToGemini } from './services/geminiApi';
 import { buildSystemPrompt, detectEmotion } from './utils/guluPersonality';
 import { maskSensitiveData } from './utils/piiScanner';
 import { extractUserInfo } from './utils/memoryManager';
+import { detectTopic, getRelatedQuestion } from './utils/topicDetector';
+import { detectReminders, detectMemoryMoment, getCheckInMessage } from './utils/reminderDetector';
 import { loadMessages, saveMessage, clearAllMessages, saveProfile, loadProfile } from './services/messageService';
+import { saveMemory, loadMemories, togglePinMemory, deleteMemory, saveReminder, loadReminders, completeReminder } from './services/memoryBankService';
 import AuthScreen from './components/AuthScreen';
 
 function App() {
@@ -35,6 +39,14 @@ function App() {
   const [sendAnimating, setSendAnimating] = useState(false);
   const [newMsgIds, setNewMsgIds] = useState(new Set());
   const undoTimerRef = useRef(null);
+
+  // Topics, Memories, Reminders
+  const [showPanel, setShowPanel] = useState(false);
+  const [topicStats, setTopicStats] = useState({});
+  const [memories, setMemories] = useState([]);
+  const [reminders, setReminders] = useState([]);
+  const [topicFilter, setTopicFilter] = useState(null);
+  const [checkInMsg, setCheckInMsg] = useState(null);
 
   const messagesEndRef = useRef(null);
   const passwordRef = useRef('');
@@ -71,11 +83,33 @@ function App() {
       const messages = await loadMessages(key);
       setChatHistory(messages);
 
+      // Build topic stats from loaded messages
+      const stats = {};
+      messages.forEach(m => { const t = m.topic || 'general'; stats[t] = (stats[t] || 0) + 1; });
+      setTopicStats(stats);
+
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (userId) {
         const { profile, summary } = await loadProfile(key, userId);
         setUserProfile(profile);
         setConversationSummary(summary);
+
+        // Load memories and reminders
+        try {
+          const mems = await loadMemories(key);
+          setMemories(mems);
+          const rems = await loadReminders(key);
+          setReminders(rems);
+        } catch {}
+
+        // Check-in message
+        if (messages.length > 0) {
+          const lastMsg = messages[messages.length - 1];
+          const daysSince = Math.floor((Date.now() - lastMsg.timestamp) / 86400000);
+          if (daysSince >= 1) {
+            setCheckInMsg(getCheckInMessage(daysSince, profile, mems));
+          }
+        }
       }
     } catch (err) {
       console.error('Load error:', err);
@@ -190,11 +224,36 @@ function App() {
       setUserProfile(updatedProfile);
     }
 
+    // Topic detection
+    const { topic } = detectTopic(rawText);
+
     // Save user message to Supabase
     const savedUser = await saveMessage(cryptoKey, session.user.id, 'user', rawText);
+    savedUser.topic = topic;
     if (currentReply) savedUser.replyTo = currentReply;
     setNewMsgIds(prev => new Set([...prev, savedUser.id]));
     setChatHistory(prev => [...prev, savedUser]);
+
+    // Update topic stats
+    setTopicStats(prev => ({ ...prev, [topic]: (prev[topic] || 0) + 1 }));
+
+    // Detect reminders from user message
+    const detectedReminders = detectReminders(rawText);
+    for (const rem of detectedReminders) {
+      try {
+        const saved = await saveReminder(cryptoKey, session.user.id, rem.content, rem.type, rem.triggerDate);
+        setReminders(prev => [...prev, saved]);
+      } catch {}
+    }
+
+    // Detect memory moments
+    const moment = detectMemoryMoment(rawText);
+    if (moment) {
+      try {
+        const saved = await saveMemory(cryptoKey, session.user.id, moment.summary, moment.category, false, savedUser.id);
+        setMemories(prev => [saved, ...prev]);
+      } catch {}
+    }
 
     // Get AI response
     setIsTyping(true);
@@ -267,6 +326,44 @@ function App() {
     document.querySelector('input[placeholder="Talk to GULU..."]')?.focus();
   };
 
+  // Pin message as memory
+  const handlePinMessage = async (msg) => {
+    if (!cryptoKey || !session) return;
+    try {
+      const saved = await saveMemory(cryptoKey, session.user.id, msg.content, 'general', true, msg.id);
+      setMemories(prev => [saved, ...prev]);
+    } catch {}
+  };
+
+  const handlePinMemory = async (id, pinned) => {
+    await togglePinMemory(id, pinned);
+    setMemories(prev => prev.map(m => m.id === id ? { ...m, is_pinned: pinned } : m));
+  };
+
+  const handleDeleteMemory = async (id) => {
+    await deleteMemory(id);
+    setMemories(prev => prev.filter(m => m.id !== id));
+  };
+
+  const handleCompleteReminder = async (id) => {
+    await completeReminder(id);
+    setReminders(prev => prev.filter(r => r.id !== id));
+  };
+
+  const handleExportMemories = () => {
+    const journal = memories.map(m => {
+      const d = new Date(m.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      return `## ${d}\n${m.is_pinned ? '📌 ' : ''}${m.content}\n`;
+    }).join('\n');
+    const blob = new Blob([`# GULU — My Memory Journal\n\n${journal}`], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gulu-journal-${new Date().toISOString().slice(0,10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // --- Emotion display ---
   const emotions = {
     neutral: { emoji: '🤖', label: 'Idle', color: 'from-slate-500 to-slate-600' },
@@ -336,6 +433,7 @@ function App() {
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden sm:block text-xs text-slate-500 mr-2">{realWorldData.date}</span>
+          <button onClick={() => setShowPanel(!showPanel)} className="p-2 text-slate-500 hover:text-violet-400 hover:bg-slate-800 rounded-lg transition" title="Topics & Memories"><PanelRightOpen size={18} /></button>
           <button onClick={handleClearChat} className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition" title="Clear Chat"><Trash2 size={18} /></button>
           <button onClick={() => { setApiKeyInput(apiKey); setShowSettings(true); }} className="p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-lg transition" title="Settings"><Settings size={18} /></button>
           <button onClick={handleLogout} className="p-2 text-slate-500 hover:text-red-400 hover:bg-slate-800 rounded-lg transition" title="Logout"><LogOut size={18} /></button>
@@ -343,6 +441,14 @@ function App() {
       </header>
 
       <main className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {/* Check-in banner */}
+        {checkInMsg && chatHistory.length > 0 && (
+          <div className="mx-auto max-w-md bg-violet-950/30 border border-violet-800/30 rounded-xl px-4 py-3 text-sm text-violet-300 text-center msg-animate">
+            {checkInMsg}
+            <button onClick={() => setCheckInMsg(null)} className="ml-2 text-violet-500 hover:text-violet-300"><X size={14} className="inline" /></button>
+          </div>
+        )}
+
         {chatHistory.length === 0 && (
           <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-3">
             <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-violet-600 to-blue-600 flex items-center justify-center text-4xl shadow-2xl">🤖</div>
@@ -364,6 +470,7 @@ function App() {
             isNew={newMsgIds.has(msg.id)}
             onDelete={handleDeleteMsg}
             onReply={handleReply}
+            onPin={handlePinMessage}
           />
         ))}
 
@@ -427,6 +534,21 @@ function App() {
           <ShieldAlert size={10} /> E2E encrypted • Synced across devices • PII auto-redacted
         </p>
       </footer>
+
+      {/* Side Panel */}
+      <SidePanel
+        isOpen={showPanel}
+        onClose={() => setShowPanel(false)}
+        topicStats={topicStats}
+        memories={memories}
+        reminders={reminders}
+        onFilterTopic={setTopicFilter}
+        activeFilter={topicFilter}
+        onPinMemory={handlePinMemory}
+        onDeleteMemory={handleDeleteMemory}
+        onCompleteReminder={handleCompleteReminder}
+        onExportMemories={handleExportMemories}
+      />
     </div>
   );
 }

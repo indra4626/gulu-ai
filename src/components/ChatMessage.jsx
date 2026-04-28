@@ -1,10 +1,10 @@
 // src/components/ChatMessage.jsx
 import React, { useState, useRef, useEffect } from 'react';
-import { User, Heart, Check, Reply, Trash2 } from 'lucide-react';
+import { User, Heart, Check, Reply, Trash2, Pin } from 'lucide-react';
 
 const REACTIONS = ['👍', '❤️', '😂', '😮', '🔥', '💜'];
 
-export default function ChatMessage({ msg, index, onDelete, onReply, isNew }) {
+export default function ChatMessage({ msg, index, onDelete, onReply, onPin, isNew }) {
   const [showReactions, setShowReactions] = useState(false);
   const [selectedReaction, setSelectedReaction] = useState(msg.reaction || null);
   const [floatingReaction, setFloatingReaction] = useState(null);
@@ -210,6 +210,9 @@ export default function ChatMessage({ msg, index, onDelete, onReply, isNew }) {
             >
               <button onClick={() => { onReply?.(msg); setShowActions(false); }} className="w-full px-4 py-2.5 text-left text-sm text-slate-300 hover:bg-slate-700 flex items-center gap-2">
                 <Reply size={14} /> Reply
+              </button>
+              <button onClick={() => { onPin?.(msg); setShowActions(false); if (navigator.vibrate) navigator.vibrate(10); }} className="w-full px-4 py-2.5 text-left text-sm text-amber-400 hover:bg-slate-700 flex items-center gap-2">
+                <Pin size={14} /> Save to Memory
               </button>
               {isUser && (
                 <button onClick={handleDelete} className="w-full px-4 py-2.5 text-left text-sm text-red-400 hover:bg-slate-700 flex items-center gap-2">
